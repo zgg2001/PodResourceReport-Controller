@@ -1,0 +1,7 @@
+apiVersion: "zgg2001.github.com/v1"
+kind: NamespaceResourceReport
+metadata:
+  name: report-test
+  namespace: zhj
+spec:
+  namespace: "zhj"
