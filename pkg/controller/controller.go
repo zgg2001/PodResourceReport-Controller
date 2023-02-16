@@ -176,8 +176,10 @@ func (c *Controller) syncHandler(key string) error {
 	}
 	nrrCopy := nrr.DeepCopy()
 
+	// 计算
 	nrrCopy.Status.CpuUsed = "123"
 	nrrCopy.Status.MemUsed = "456"
+
 	if !reflect.DeepEqual(nrrCopy.Status, nrr.Status) {
 		err = c.updateNamespaceResourceReportStatus(nrrCopy)
 		if err != nil {
@@ -192,7 +194,7 @@ func (c *Controller) updateNamespaceResourceReportStatus(nrr *v1.NamespaceResour
 	nrrCopy := nrr.DeepCopy()
 	var updateErr error
 	_ = retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		_, updateErr = c.sampleclientset.Zgg2001V1().NamespaceResourceReports(nrrCopy.Namespace).UpdateStatus(context.TODO(), nrrCopy, metav1.UpdateOptions{})
+		_, updateErr = c.sampleclientset.Zgg2001V1().NamespaceResourceReports(nrrCopy.Namespace).Update(context.TODO(), nrrCopy, metav1.UpdateOptions{})
 		return updateErr
 	})
 	return updateErr

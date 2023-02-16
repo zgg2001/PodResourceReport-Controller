@@ -31,6 +31,6 @@ type NamespaceResourceReportSpec struct {
 }
 
 type NamespaceResourceReportStatus struct {
-	CpuUsed string `json:"cpuused,omitempty"`
-	MemUsed string `json:"memused,omitempty"`
+	CpuUsed string `json:"cpuUsed,omitempty"`
+	MemUsed string `json:"memUsed,omitempty"`
 }
