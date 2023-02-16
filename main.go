@@ -6,6 +6,7 @@ import (
 
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	appslisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
@@ -45,7 +46,11 @@ func main() {
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeClient, time.Second*30)
 	exampleInformerFactory := informers.NewSharedInformerFactory(exampleClient, time.Second*30)
 
-	controller := controller.NewController(kubeClient, exampleClient,
+	var podLister appslisters.PodLister
+	podInformer := kubeInformerFactory.Core().V1().Pods()
+	podLister = podInformer.Lister()
+
+	controller := controller.NewController(kubeClient, exampleClient, podLister,
 		kubeInformerFactory.Apps().V1().Deployments(),
 		exampleInformerFactory.Zgg2001().V1().NamespaceResourceReports())
 

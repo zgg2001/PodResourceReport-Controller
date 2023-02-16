@@ -22,12 +22,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	appsinformers "k8s.io/client-go/informers/apps/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	appslisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
@@ -52,19 +54,21 @@ const (
 
 // Controller is the controller implementation for NamespaceResourceReport resources
 type Controller struct {
-	kubeclientset   kubernetes.Interface
-	sampleclientset clientset.Interface
+	KubeCli kubernetes.Interface
+	NsrrCli clientset.Interface
 
-	nsrrLister listers.NamespaceResourceReportLister
-	nsrrSynced cache.InformerSynced
+	PodLister  appslisters.PodLister
+	NsrrLister listers.NamespaceResourceReportLister
+	NsrrSynced cache.InformerSynced
 
-	workqueue workqueue.RateLimitingInterface
-	recorder  record.EventRecorder
+	Workqueue workqueue.RateLimitingInterface
+	Recorder  record.EventRecorder
 }
 
 func NewController(
-	kubeclientset kubernetes.Interface,
-	sampleclientset clientset.Interface,
+	kubeCli kubernetes.Interface,
+	nsrrCli clientset.Interface,
+	podLister appslisters.PodLister,
 	deploymentInformer appsinformers.DeploymentInformer,
 	namespaceResourceReportInformer informers.NamespaceResourceReportInformer) *Controller {
 
@@ -72,16 +76,17 @@ func NewController(
 	klog.V(4).Info("Creating event broadcaster")
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartStructuredLogging(0)
-	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: kubeclientset.CoreV1().Events("")})
+	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: kubeCli.CoreV1().Events("")})
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: controllerAgentName})
 
 	controller := &Controller{
-		kubeclientset:   kubeclientset,
-		sampleclientset: sampleclientset,
-		nsrrLister:      namespaceResourceReportInformer.Lister(),
-		nsrrSynced:      namespaceResourceReportInformer.Informer().HasSynced,
-		workqueue:       workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "NamespaceResourceReports"),
-		recorder:        recorder,
+		KubeCli:    kubeCli,
+		NsrrCli:    nsrrCli,
+		PodLister:  podLister,
+		NsrrLister: namespaceResourceReportInformer.Lister(),
+		NsrrSynced: namespaceResourceReportInformer.Informer().HasSynced,
+		Workqueue:  workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "NamespaceResourceReports"),
+		Recorder:   recorder,
 	}
 
 	// Set up an event handler for when NamespaceResourceReport resources change
@@ -99,11 +104,11 @@ func NewController(
 func (c *Controller) Run(workers int, stopCh <-chan struct{}) error {
 
 	defer utilruntime.HandleCrash()
-	defer c.workqueue.ShutDown()
+	defer c.Workqueue.ShutDown()
 	klog.Info("Starting NamespaceResourceReport controller")
 
 	klog.Info("Waiting for informer caches to sync")
-	if ok := cache.WaitForCacheSync(stopCh, c.nsrrSynced); !ok {
+	if ok := cache.WaitForCacheSync(stopCh, c.NsrrSynced); !ok {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
 
@@ -126,25 +131,25 @@ func (c *Controller) runWorker() {
 
 func (c *Controller) processNextWorkItem() bool {
 
-	obj, shutdown := c.workqueue.Get()
+	obj, shutdown := c.Workqueue.Get()
 	if shutdown {
 		return false
 	}
 
 	err := func(obj interface{}) error {
-		defer c.workqueue.Done(obj)
+		defer c.Workqueue.Done(obj)
 		var key string
 		var ok bool
 		if key, ok = obj.(string); !ok {
-			c.workqueue.Forget(obj)
+			c.Workqueue.Forget(obj)
 			utilruntime.HandleError(fmt.Errorf("expected string in workqueue but got %#v", obj))
 			return nil
 		}
 		if err := c.syncHandler(key); err != nil {
-			c.workqueue.AddRateLimited(key)
+			c.Workqueue.AddRateLimited(key)
 			return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
 		}
-		c.workqueue.Forget(obj)
+		c.Workqueue.Forget(obj)
 		klog.Infof("Successfully synced '%s'", key)
 		return nil
 	}(obj)
@@ -166,7 +171,7 @@ func (c *Controller) syncHandler(key string) error {
 		return nil
 	}
 
-	nrr, err := c.nsrrLister.NamespaceResourceReports(namespace).Get(name)
+	nrr, err := c.NsrrLister.NamespaceResourceReports(namespace).Get(name)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			utilruntime.HandleError(fmt.Errorf("NamespaceResourceReport '%s' in work queue no longer exists", key))
@@ -177,8 +182,16 @@ func (c *Controller) syncHandler(key string) error {
 	nrrCopy := nrr.DeepCopy()
 
 	// 计算
-	nrrCopy.Status.CpuUsed = "123"
-	nrrCopy.Status.MemUsed = "456"
+	pods, err := c.PodLister.Pods(nrrCopy.Spec.Namespace).List(labels.Set{}.AsSelector())
+	if err != nil {
+		fmt.Println("pod list error: ", err)
+	}
+	for _, pod := range pods {
+		fmt.Println(pod.Name)
+		for _, container := range pod.Spec.Containers {
+			fmt.Println(container.Resources.Requests.Cpu(), container.Resources.Requests.Memory())
+		}
+	}
 
 	if !reflect.DeepEqual(nrrCopy.Status, nrr.Status) {
 		err = c.updateNamespaceResourceReportStatus(nrrCopy)
@@ -186,7 +199,7 @@ func (c *Controller) syncHandler(key string) error {
 			return err
 		}
 	}
-	c.recorder.Event(nrr, corev1.EventTypeNormal, SuccessSynced, MessageResourceSynced)
+	c.Recorder.Event(nrr, corev1.EventTypeNormal, SuccessSynced, MessageResourceSynced)
 	return nil
 }
 
@@ -194,7 +207,7 @@ func (c *Controller) updateNamespaceResourceReportStatus(nrr *v1.NamespaceResour
 	nrrCopy := nrr.DeepCopy()
 	var updateErr error
 	_ = retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		_, updateErr = c.sampleclientset.Zgg2001V1().NamespaceResourceReports(nrrCopy.Namespace).Update(context.TODO(), nrrCopy, metav1.UpdateOptions{})
+		_, updateErr = c.NsrrCli.Zgg2001V1().NamespaceResourceReports(nrrCopy.Namespace).Update(context.TODO(), nrrCopy, metav1.UpdateOptions{})
 		return updateErr
 	})
 	return updateErr
@@ -207,5 +220,5 @@ func (c *Controller) enqueueNamespaceResourceReport(obj interface{}) {
 		utilruntime.HandleError(err)
 		return
 	}
-	c.workqueue.Add(key)
+	c.Workqueue.Add(key)
 }
