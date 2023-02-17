@@ -21,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -182,16 +183,25 @@ func (c *Controller) syncHandler(key string) error {
 	nrrCopy := nrr.DeepCopy()
 
 	// 计算
+	var cpu, mem int64
 	pods, err := c.PodLister.Pods(nrrCopy.Spec.Namespace).List(labels.Set{}.AsSelector())
 	if err != nil {
-		fmt.Println("pod list error: ", err)
+		return err
 	}
 	for _, pod := range pods {
-		fmt.Println(pod.Name)
 		for _, container := range pod.Spec.Containers {
-			fmt.Println(container.Resources.Requests.Cpu(), container.Resources.Requests.Memory())
+			c, ok := container.Resources.Requests.Cpu().AsDec().Unscaled()
+			if ok {
+				cpu += c
+			}
+			m, ok := container.Resources.Requests.Memory().AsDec().Unscaled()
+			if ok {
+				mem += m
+			}
 		}
 	}
+	nrrCopy.Status.CpuUsed = resource.NewMilliQuantity(cpu, resource.DecimalSI).String()
+	nrrCopy.Status.MemUsed = resource.NewQuantity(mem, resource.BinarySI).String()
 
 	if !reflect.DeepEqual(nrrCopy.Status, nrr.Status) {
 		err = c.updateNamespaceResourceReportStatus(nrrCopy)
