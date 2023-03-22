@@ -1,14 +1,19 @@
 # PodResourceReport-Controller
 A k8s pod resource report controller
 
-
-## 快速启动
+## 快速启动(手动部署controller)
 ```shell
 cd crd
 kubectl apply -f namespaceresourcereports_crd.yaml
 cd ..
 go build main.go
 ./main -kubeconfig=$HOME/.kube/config
+```
+
+## 镜像部署controller
+```shell
+bash ./build.sh
+kubectl apply -f example/reporter-deployment.yaml 
 ```
 
 ## 查看资源消耗
