@@ -16,6 +16,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"log"
 	"reflect"
 	"time"
 
@@ -118,6 +119,9 @@ func (c *Controller) Run(workers int, stopCh <-chan struct{}) error {
 		go wait.Until(c.runWorker, time.Second, stopCh)
 	}
 
+	// pod watch
+	go c.watchPod(stopCh)
+
 	klog.Info("Started workers")
 	<-stopCh
 	klog.Info("Shutting down workers")
@@ -161,6 +165,33 @@ func (c *Controller) processNextWorkItem() bool {
 	}
 
 	return true
+}
+
+func (c *Controller) watchPod(stopCh <-chan struct{}) {
+	pods, err := c.KubeCli.CoreV1().Pods("").Watch(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		utilruntime.HandleError(err)
+	}
+	for {
+		select {
+		case event := <-pods.ResultChan():
+			// Pod 信息
+			pod := event.Object.(*corev1.Pod)
+			podns := pod.Namespace
+			// NamespaceResourceReports 信息
+			ret, err := c.NsrrLister.List(labels.Set{}.AsSelector())
+			if err != nil {
+				utilruntime.HandleError(err)
+			}
+			for _, cr := range ret {
+				if cr.Spec.Namespace == podns {
+					c.enqueueNamespaceResourceReport(cr)
+				}
+			}
+		case <-stopCh:
+			return
+		}
+	}
 }
 
 // reconcile

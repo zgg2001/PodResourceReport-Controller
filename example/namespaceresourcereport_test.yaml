@@ -4,4 +4,4 @@ metadata:
   name: report-test
   namespace: zhj
 spec:
-  namespace: "olm"
+  namespace: "default"

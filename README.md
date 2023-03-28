@@ -6,7 +6,7 @@ A k8s pod resource report controller
 cd crd
 kubectl apply -f namespaceresourcereports_crd.yaml
 cd ..
-go build main.go
+go build cmd/main.go
 ./main -kubeconfig=$HOME/.kube/config
 ```
 
